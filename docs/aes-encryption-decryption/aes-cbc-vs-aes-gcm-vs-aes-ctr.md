@@ -93,3 +93,81 @@ While AES-CBC or AES-CTR with HMAC is secure when implemented correctly (as in y
 | **Best Use Case**          | Secure transmission of data (e.g., network communication).      | Legacy systems or compatibility with older standards. | Large files or streaming encryption.        |
 | **Cryptographic Strength** | Strong due to combined encryption + authentication.             | Strong but must use HMAC for integrity.               | Strong but must use HMAC for integrity.     |
 | **Complexity**             | Simpler (combines encryption and authentication).               | More complex (requires separate HMAC).                | More complex (requires separate HMAC).      |
+
+**AES-GCM Full Example**
+
+```python
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+from secrets import token_bytes
+
+
+class FileEncryptionHandler:
+    def __init__(self, password: str):
+        self.password = password
+
+    def __derive_key(self, salt, length=32, iterations=310000):
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=length,
+            salt=salt,
+            iterations=iterations,
+            backend=default_backend(),
+        )
+        return kdf.derive(self.password.encode())
+
+    def encrypt_file(self, file, chunk_size=1024 * 1024):
+        """
+        Encrypt a file with AES-GCM and PBKDF2 key derivation.
+        Args:
+            file (file-like object): The file to encrypt.
+            chunk_size (int): Size of file chunks for encryption (default 1MB).
+        Returns:
+            bytes: Encrypted content (salt + IV + ciphertext + auth_tag).
+        """
+
+        salt = token_bytes(16)
+        iv = token_bytes(12)  # AES-GCM uses 12 bytes
+
+        encryption_key = self.__derive_key(salt)
+
+        cipher = Cipher(algorithms.AES(encryption_key), modes.GCM(iv))
+        encryptor = cipher.encryptor()
+
+        ciphertext = b""
+        while chunk := file.read(chunk_size):
+            ciphertext += encryptor.update(chunk)
+        ciphertext += encryptor.finalize()
+
+        auth_tag = encryptor.tag
+
+        return b"\x01" + salt + iv + ciphertext + auth_tag
+
+    def decrypt_file(self, encrypted_content):
+        """
+        Decrypt a file encrypted with AES-GCM and PBKDF2.
+        Args:
+            encrypted_content (bytes): The encrypted file content (salt + IV + ciphertext + auth_tag).
+        Returns:
+            bytes: The decrypted plaintext.
+        """
+        version = encrypted_content[0]
+        if version != 1:
+            raise ValueError("Unsupported encryption version.")
+
+        salt = encrypted_content[1:17]
+        iv = encrypted_content[17:29]
+        auth_tag = encrypted_content[-16:]
+        ciphertext = encrypted_content[29:-16]
+        encryption_key = self.__derive_key(salt)
+
+        cipher = Cipher(algorithms.AES(encryption_key), modes.GCM(iv, auth_tag))
+        decryptor = cipher.decryptor()
+
+        plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+
+        return plaintext
+
+```
